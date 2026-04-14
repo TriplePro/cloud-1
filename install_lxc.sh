@@ -20,7 +20,7 @@ BRIDGE="vmbr0"
 STORAGE="local-lvm"
 
 printf "\n==============================\n"
-printf "make LXC for WordPress\n\n"
+printf "make LXC for WordPress\n"
 
 printf "\n==============================\n"
 printf "does the template exists...\n"
@@ -40,6 +40,8 @@ fi
 
 printf "\n==============================\n"
 printf "make LXC...\n"
+printf "\n==============================\n\n"
+
 pct create "$CTID" "$TEMPLATE" \
     --hostname "$HOSTNAME" \
     --cores "$CORES" \
