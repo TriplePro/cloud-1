@@ -65,5 +65,7 @@ printf "adding ssh root access\n"
 pct exec "$CTID" -- sed -i 's/#PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
 pct exec "$CTID" -- systemctl restart ssh
 
+sshpass -p 'password' ssh-copy-id root@"$CTID"
+
 printf "\n==============================\n"
 printf "LXC: %s is ready and able.\n" "$CTID"
