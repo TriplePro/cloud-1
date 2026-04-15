@@ -95,27 +95,26 @@ pct exec "$CTID" -- chmod -R 755 "$WP_DIR"
 printf "\n==============================\n"
 printf "configure nginx for WordPress...\n"
 pct exec "$CTID" -- bash -c "cat > /etc/nginx/sites-available/wordpress << 'EOF'
-server {
-    listen 80;
-    server_name $LXC_IP;
+server
+{
+  listen 80;
+  server_name $LXC_IP;
 
-    root ${WP_DIR};
-    index index.php index.html;
+  root ${WP_DIR};
+  index index.php index.html;
 
-    location / {
-        try_files \$uri \$uri/ /index.php?\$args;
-    }
+  location / {
+    try_files \$uri \$uri/ /index.php?\$args;
+  }
 
-    location ~ \.php\$ {
-        include snippets/fastcgi-php.conf;
-        fastcgi_pass unix:${PHP_FPM_SOCK};
-        fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
-        include fastcgi_params;
-    }
+  location ~ \.php\$ {
+    include snippets/fastcgi-php.conf;
+    fastcgi_pass unix:${PHP_FPM_SOCK};
+  }
 
-    location ~ /\.ht {
-        deny all;
-    }
+  location ~ /\.ht {
+    deny all;
+  }
 }
 EOF
 "
