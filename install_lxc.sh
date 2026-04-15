@@ -5,7 +5,8 @@ set -e          # stop on error
 set -u          # stop on undefined variable
 set -o pipefail # stop if one | of | the options fail
 
-CTID=150
+read -p "Enter the container ID (CTID): " CTID
+#CTID=150
 HOSTNAME="wordpress-lxc"
 TEMPLATE="local:vztmpl/ubuntu-22.04-standard_22.04-1_amd64.tar.zst"
 PASSWORD="password"
@@ -16,8 +17,8 @@ IPV4="10.24.50.${CTID}/24"
 GATEWAY="10.24.50.1"
 DNS_SERVER="1.1.1.1"
 BRIDGE="vmbr0"
-#STORAGE="shared-harddisk-pool"
-STORAGE="local-lvm"
+STORAGE="shared-harddisk-pool"
+#STORAGE="local-lvm"
 
 printf "\n==============================\n"
 printf "make LXC for WordPress\n"
@@ -56,6 +57,13 @@ pct create "$CTID" "$TEMPLATE" \
 printf "\n==============================\n"
 printf "start LXC...\n"
 pct start "$CTID"
+
+sleep 10
+
+printf "\n==============================\n"
+printf "adding ssh root access\n"
+pct exec "$CTID" -- sed -i 's/#PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
+pct exec "$CTID" -- systemctl restart ssh
 
 printf "\n==============================\n"
 printf "LXC: %s is ready and able.\n" "$CTID"
