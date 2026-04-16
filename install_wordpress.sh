@@ -5,7 +5,7 @@ set -e          # stop on error
 set -u          # stop on undefined variable
 set -o pipefail # stop if one | of | the options fail
 
-CTID=150
+read -p "Enter the container ID (CTID): " CTID
 LXC_IP="10.24.50.$CTID"
 DB_USER="wordpress_user"
 DB_PASSWORD="password"

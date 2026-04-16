@@ -9,7 +9,7 @@ read -p "Enter the container ID (CTID): " CTID
 HOSTNAME="wordpress-lxc"
 TEMPLATE="local:vztmpl/ubuntu-22.04-standard_22.04-1_amd64.tar.zst"
 PASSWORD="password"
-DISK_SIZE="8"
+DISK_SIZE="30"
 CORES=1
 MEMORY=1024
 IPV4="10.24.50.${CTID}/24"
@@ -55,6 +55,8 @@ printf "\n==============================\n"
 printf "make LXC...\n"
 printf "\n==============================\n\n"
 
+#    --net0 "name=eth0,bridge=${BRIDGE},ip=${IPV4},gw=${GATEWAY},rate=50" \
+
 pct create "$CTID" "$TEMPLATE" \
     --hostname "$HOSTNAME" \
     --cores "$CORES" \
@@ -78,6 +80,20 @@ while ! pct status "$CTID" | grep -q "running"; do
 done
 
 printf "\n==============================\n"
+printf "update container\n"
+printf "\n==============================\n"
+
+pct exec "$CTID" -- apt update
+
+printf "\n==============================\n"
+printf "fix locale settings\n"
+printf "\n==============================\n"
+
+pct exec "$CTID" -- apt install -y locales
+pct exec "$CTID" -- locale-gen en_US.UTF-8
+pct exec "$CTID" -- update-locale LANG=en_US.UTF-8
+
+printf "\n==============================\n"
 printf "create user and setup SSH access\n"
 pct exec "$CTID" -- useradd -m -s /bin/bash "$USERNAME"
 pct exec "$CTID" -- usermod -aG sudo "$USERNAME"
@@ -91,6 +107,16 @@ printf "\n==============================\n"
 printf "configure sudoers for passwordless sudo\n"
 pct exec "$CTID" -- bash -c "echo '$USERNAME ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers.d/$USERNAME"
 pct exec "$CTID" -- chmod 440 /etc/sudoers.d/"$USERNAME"
+
+printf "\n==============================\n"
+printf "configure firewall\n"
+pct exec "$CTID" -- apt install -y ufw
+pct exec "$CTID" -- ufw --force enable
+pct exec "$CTID" -- ufw default deny incoming
+pct exec "$CTID" -- ufw default allow outgoing
+pct exec "$CTID" -- ufw allow 22/tcp
+pct exec "$CTID" -- ufw allow 80/tcp
+pct exec "$CTID" -- ufw allow 443/tcp
 
 printf "\n==============================\n"
 printf "LXC: %s is ready and able.\n" "$CTID"
