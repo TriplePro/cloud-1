@@ -56,6 +56,7 @@ printf "make LXC...\n"
 printf "\n==============================\n\n"
 
 #    --net0 "name=eth0,bridge=${BRIDGE},ip=${IPV4},gw=${GATEWAY},rate=50" \
+#    --net0 "name=eth0,bridge=${BRIDGE},ip=${IPV4},gw=${GATEWAY}" \
 
 pct create "$CTID" "$TEMPLATE" \
     --hostname "$HOSTNAME" \
@@ -63,7 +64,7 @@ pct create "$CTID" "$TEMPLATE" \
     --memory "$MEMORY" \
     --rootfs "${STORAGE}:${DISK_SIZE}" \
     --unprivileged 1 \
-    --net0 "name=eth0,bridge=${BRIDGE},ip=${IPV4},gw=${GATEWAY}" \
+    --net0 "name=eth0,bridge=${BRIDGE},ip=${IPV4},gw=${GATEWAY},rate=50" \
     --nameserver "$DNS_SERVER" \
     --password "$PASSWORD" \
     --features nesting=1
