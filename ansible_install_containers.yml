@@ -1,6 +1,4 @@
 ---
 containers:
   - ctid: 151
-    hostname: "wordpress-151"
   - ctid: 152
-    hostname: "wordpress-152"

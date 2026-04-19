@@ -54,7 +54,7 @@
         pct status {{ item.ctid }} | grep -q "running"
       register: wait_stop
       until: wait_stop.rc != 0
-      retries: 60
+      retries: 90
       delay: 1
       loop: "{{ containers }}"
       failed_when: false
@@ -68,7 +68,7 @@
     - name: Create new LXC containers
       shell: |
         pct create {{ item.ctid }} "{{ template }}" \
-          --hostname "{{ item.hostname }}" \
+          --hostname "wordpress-{{ item.ctid }}" \
           --cores {{ cores }} \
           --memory {{ memory }} \
           --rootfs "{{ storage }}:{{ disk_size }}" \
@@ -89,11 +89,107 @@
         pct status {{ item.ctid }} | grep -q "running"
       register: wait_start
       until: wait_start.rc == 0
-      retries: 60
+      retries: 90
       delay: 1
+      loop: "{{ containers }}"
+
+    - name: Update container packages
+      shell: |
+        pct exec {{ item.ctid }} -- apt update
+      loop: "{{ containers }}"
+
+    - name: Install locales
+      shell: |
+        pct exec {{ item.ctid }} -- apt install -y locales
+      loop: "{{ containers }}"
+
+    - name: Generate locale
+      shell: |
+        pct exec {{ item.ctid }} -- locale-gen en_US.UTF-8
+      loop: "{{ containers }}"
+
+    - name: Update locale settings
+      shell: |
+        pct exec {{ item.ctid }} -- update-locale LANG=en_US.UTF-8
+      loop: "{{ containers }}"
+
+    - name: Create ansible user
+      shell: |
+        pct exec {{ item.ctid }} -- useradd -m -s /bin/bash {{ username }}
+      loop: "{{ containers }}"
+
+    - name: Add ansible user to sudoers group
+      shell: |
+        pct exec {{ item.ctid }} -- usermod -aG sudo {{ username }}
+      loop: "{{ containers }}"
+
+    - name: Create SSH directory for ansible user
+      shell: |
+        pct exec {{ item.ctid }} -- mkdir -p /home/{{ username }}/.ssh
+      loop: "{{ containers }}"
+
+    - name: Copy SSH public key to container
+      shell: |
+        cat ~/.ssh/id_rsa.pub | pct exec {{ item.ctid }} -- bash -c "cat >> /home/{{ username }}/.ssh/authorized_keys"
+      loop: "{{ containers }}"
+
+    - name: Set SSH directory ownership
+      shell: |
+        pct exec {{ item.ctid }} -- chown -R {{ username }}:{{ username }} /home/{{ username }}/.ssh
+      loop: "{{ containers }}"
+
+    - name: Set SSH directory permissions
+      shell: |
+        pct exec {{ item.ctid }} -- chmod 700 /home/{{ username }}/.ssh
+      loop: "{{ containers }}"
+
+    - name: Set authorized_keys permissions
+      shell: |
+        pct exec {{ item.ctid }} -- chmod 600 /home/{{ username }}/.ssh/authorized_keys
+      loop: "{{ containers }}"
+
+    - name: Configure passwordless sudo for ansible user
+      shell: |
+        pct exec {{ item.ctid }} -- bash -c "echo '{{ username }} ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers.d/{{ username }}"
+      loop: "{{ containers }}"
+
+    - name: Set sudoers file permissions
+      shell: |
+        pct exec {{ item.ctid }} -- chmod 440 /etc/sudoers.d/{{ username }}
+      loop: "{{ containers }}"
+
+    - name: Install UFW firewall
+      shell: |
+        pct exec {{ item.ctid }} -- apt install -y ufw
+      loop: "{{ containers }}"
+
+    - name: Enable firewall
+      shell: |
+        pct exec {{ item.ctid }} -- ufw --force enable
+      loop: "{{ containers }}"
+
+    - name: Configure firewall defaults
+      shell: |
+        pct exec {{ item.ctid }} -- ufw default deny incoming
+        pct exec {{ item.ctid }} -- ufw default allow outgoing
+      loop: "{{ containers }}"
+
+    - name: Allow SSH through firewall
+      shell: |
+        pct exec {{ item.ctid }} -- ufw allow 22/tcp
+      loop: "{{ containers }}"
+
+    - name: Allow HTTP through firewall
+      shell: |
+        pct exec {{ item.ctid }} -- ufw allow 80/tcp
+      loop: "{{ containers }}"
+
+    - name: Allow HTTPS through firewall
+      shell: |
+        pct exec {{ item.ctid }} -- ufw allow 443/tcp
       loop: "{{ containers }}"
 
     - name: Display completion message
       debug:
-        msg: "LXC {{ item.ctid }} ({{ item.hostname }}) is ready - IP: {{ base_ip }}.{{ item.ctid }}"
+        msg: "LXC {{ item.ctid }} is ready and able (IP: {{ base_ip }}.{{ item.ctid }})"
       loop: "{{ containers }}"
