@@ -98,6 +98,11 @@
         pct exec {{ item.ctid }} -- apt update
       loop: "{{ containers }}"
 
+    - name: Upgrade container packages
+      shell: |
+        pct exec {{ item.ctid }} -- apt upgrade -y
+      loop: "{{ containers }}"
+
     - name: Install locales
       shell: |
         pct exec {{ item.ctid }} -- apt install -y locales

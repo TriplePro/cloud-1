@@ -1,0 +1,206 @@
+---
+- name: Install and configure WordPress on LXC containers
+  hosts: localhost
+  connection: local
+  become: true
+  vars:
+    db_user: "wordpress_user"
+    db_password: "password"
+    db_name: "wordpress"
+    wp_url: "https://wordpress.org/latest.tar.gz"
+    wp_dir: "/var/www/wordpress"
+    base_ip: "10.24.50"
+
+  vars_files:
+    - ansible_install_containers.yml
+
+  tasks:
+    - name: Check if containers exist
+      shell: |
+        pct status {{ item.ctid }}
+      register: container_exists
+      failed_when: false
+      changed_when: false
+      loop: "{{ containers }}"
+
+    - name: Fail if any container does not exist
+      fail:
+        msg: |
+          ERROR: One or more containers do not exist!
+          Please run the LXC installation playbook first (ansible_install_lxc.yml)
+          to create the containers before installing WordPress.
+      when: container_exists.results | selectattr('rc', 'equalto', 1) | list | length > 0
+
+    - name: Check if container is running
+      shell: |
+        pct status {{ item.ctid }} | grep -q "running"
+      register: container_running
+      failed_when: false
+      changed_when: false
+      loop: "{{ containers }}"
+
+    - name: Start container if not running
+      shell: |
+        pct start {{ item.0.ctid }}
+      loop: "{{ containers | zip(container_running.results) | list }}"
+      when: item.1.rc != 0
+      failed_when: false
+
+    - name: Wait for container to be ready
+      pause:
+        seconds: 10
+      when: inventory_hostname == "localhost"
+      run_once: true
+
+    - name: Update container packages
+      shell: |
+        pct exec {{ item.ctid }} -- apt update
+      loop: "{{ containers }}"
+
+    - name: Upgrade container packages
+      shell: |
+        pct exec {{ item.ctid }} -- apt upgrade -y
+      loop: "{{ containers }}"
+
+    - name: Install nginx
+      shell: |
+        pct exec {{ item.ctid }} -- apt install -y nginx
+      loop: "{{ containers }}"
+
+    - name: Install MariaDB server
+      shell: |
+        pct exec {{ item.ctid }} -- apt install -y mariadb-server
+      loop: "{{ containers }}"
+
+    - name: Install PHP and modules
+      shell: |
+        pct exec {{ item.ctid }} -- apt install -y php-fpm php-mysql
+      loop: "{{ containers }}"
+
+    - name: Detect PHP version
+      shell: |
+        pct exec {{ item.ctid }} -- php -v | grep -oP 'PHP \K[0-9]+\.[0-9]+'
+      register: php_version_output
+      loop: "{{ containers }}"
+      changed_when: false
+
+    - name: Start and enable MariaDB
+      shell: |
+        pct exec {{ item.ctid }} -- systemctl start mariadb
+        pct exec {{ item.ctid }} -- systemctl enable mariadb
+      loop: "{{ containers }}"
+
+    - name: Create WordPress database
+      shell: |
+        pct exec {{ item.ctid }} -- mysql -e "CREATE DATABASE IF NOT EXISTS {{ db_name }};"
+      loop: "{{ containers }}"
+
+    - name: Create WordPress database user
+      shell: |
+        pct exec {{ item.ctid }} -- mysql -e "CREATE USER IF NOT EXISTS '{{ db_user }}'@'localhost' IDENTIFIED BY '{{ db_password }}';"
+      loop: "{{ containers }}"
+      failed_when: false
+
+    - name: Grant database privileges
+      shell: |
+        pct exec {{ item.ctid }} -- mysql -e "GRANT ALL PRIVILEGES ON {{ db_name }}.* TO '{{ db_user }}'@'localhost';"
+      loop: "{{ containers }}"
+
+    - name: Flush MySQL privileges
+      shell: |
+        pct exec {{ item.ctid }} -- mysql -e "FLUSH PRIVILEGES;"
+      loop: "{{ containers }}"
+
+    - name: Create WordPress directory
+      shell: |
+        pct exec {{ item.ctid }} -- mkdir -p {{ wp_dir }}
+      loop: "{{ containers }}"
+
+    - name: Download and install WordPress
+      shell: |
+        pct exec {{ item.ctid }} -- bash -c "cd /tmp && wget -q {{ wp_url }} && tar -xzf latest.tar.gz && mv wordpress/* {{ wp_dir }}/ && rm -rf wordpress latest.tar.gz"
+      loop: "{{ containers }}"
+
+    - name: Set WordPress directory ownership
+      shell: |
+        pct exec {{ item.ctid }} -- chown -R www-data:www-data {{ wp_dir }}
+      loop: "{{ containers }}"
+
+    - name: Set WordPress directory permissions
+      shell: |
+        pct exec {{ item.ctid }} -- chmod -R 755 {{ wp_dir }}
+      loop: "{{ containers }}"
+
+    - name: Configure nginx for WordPress
+      shell: |
+        pct exec {{ item.ctid }} -- bash -c "cat > /etc/nginx/sites-available/wordpress << 'EOF'
+        server {
+          listen 80;
+          server_name {{ base_ip }}.{{ item.ctid }};
+          root {{ wp_dir }};
+          index index.php index.html;
+          location / {
+            try_files \$uri \$uri/ /index.php?\$args;
+          }
+          location ~ \.php$ {
+            include snippets/fastcgi-php.conf;
+            fastcgi_pass unix:/var/run/php/php{{ php_version_output.results[loop_index].stdout }}-fpm.sock;
+          }
+          location ~ /\.ht {
+            deny all;
+          }
+        }
+        EOF"
+      loop: "{{ containers }}"
+      loop_control:
+        index_var: loop_index
+
+    - name: Check if nginx site symlink exists
+      shell: |
+        pct exec {{ item.ctid }} -- [ -L /etc/nginx/sites-enabled/wordpress ]
+      register: wp_symlink_exists
+      failed_when: false
+      changed_when: false
+      loop: "{{ containers }}"
+
+    - name: Remove default nginx site
+      shell: |
+        pct exec {{ item.0.ctid }} -- rm -f /etc/nginx/sites-enabled/default
+      loop: "{{ containers | zip(wp_symlink_exists.results) | list }}"
+      when: item.1.rc != 0
+      failed_when: false
+
+    - name: Create nginx site symlink
+      shell: |
+        pct exec {{ item.0.ctid }} -- ln -s /etc/nginx/sites-available/wordpress /etc/nginx/sites-enabled/wordpress
+      loop: "{{ containers | zip(wp_symlink_exists.results) | list }}"
+      when: item.1.rc != 0
+
+    - name: Start PHP-FPM
+      shell: |
+        pct exec {{ item.ctid }} -- systemctl start php{{ php_version_output.results[loop_index].stdout }}-fpm
+        pct exec {{ item.ctid }} -- systemctl enable php{{ php_version_output.results[loop_index].stdout }}-fpm
+      loop: "{{ containers }}"
+      loop_control:
+        index_var: loop_index
+
+    - name: Test nginx configuration
+      shell: |
+        pct exec {{ item.ctid }} -- nginx -t
+      loop: "{{ containers }}"
+
+    - name: Restart nginx
+      shell: |
+        pct exec {{ item.ctid }} -- systemctl restart nginx
+        pct exec {{ item.ctid }} -- systemctl enable nginx
+      loop: "{{ containers }}"
+
+    - name: Display WordPress installation summary
+      debug:
+        msg:
+          - "WordPress installation complete for LXC {{ item.ctid }}"
+          - "IP: {{ base_ip }}.{{ item.ctid }}"
+          - "Database user: {{ db_user }}"
+          - "Database name: {{ db_name }}"
+          - "WordPress directory: {{ wp_dir }}"
+      loop: "{{ containers }}"
