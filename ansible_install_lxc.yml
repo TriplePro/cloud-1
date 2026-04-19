@@ -1,0 +1,99 @@
+---
+- name: Create and configure LXC containers for WordPress
+  hosts: localhost
+  connection: local
+  become: true
+  vars:
+    template: "local:vztmpl/ubuntu-22.04-standard_22.04-1_amd64.tar.zst"
+    password: "password"
+    disk_size: 30
+    cores: 1
+    memory: 1024
+    gateway: "10.24.50.1"
+    dns_server: "1.1.1.1"
+    bridge: "vmbr0"
+    storage: "shared-harddisk-pool"
+    username: "ansible"
+    base_ip: "10.24.50"
+
+  vars_files:
+    - ansible_install_containers.yml
+
+  tasks:
+    - name: Check if template exists
+      shell: |
+        pveam list local | grep -q "ubuntu-22.04-standard_22.04-1_amd64.tar.zst"
+      register: template_check
+      failed_when: false
+      changed_when: false
+      run_once: true
+
+    - name: Fail if template does not exist
+      fail:
+        msg: "Template not found in local storage"
+      when: template_check.rc != 0
+      run_once: true
+
+    - name: Check if LXC container already exists
+      shell: |
+        pct status {{ item.ctid }}
+      register: container_status
+      failed_when: false
+      changed_when: false
+      loop: "{{ containers }}"
+
+    - name: Stop existing containers
+      shell: |
+        pct stop {{ item.ctid }}
+      loop: "{{ containers }}"
+      failed_when: false
+      ignore_errors: yes
+
+    - name: Wait for containers to stop
+      shell: |
+        pct status {{ item.ctid }} | grep -q "running"
+      register: wait_stop
+      until: wait_stop.rc != 0
+      retries: 60
+      delay: 1
+      loop: "{{ containers }}"
+      failed_when: false
+
+    - name: Destroy existing containers
+      shell: |
+        pct destroy {{ item.ctid }}
+      loop: "{{ containers }}"
+      failed_when: false
+
+    - name: Create new LXC containers
+      shell: |
+        pct create {{ item.ctid }} "{{ template }}" \
+          --hostname "{{ item.hostname }}" \
+          --cores {{ cores }} \
+          --memory {{ memory }} \
+          --rootfs "{{ storage }}:{{ disk_size }}" \
+          --unprivileged 1 \
+          --net0 "name=eth0,bridge={{ bridge }},ip={{ base_ip }}.{{ item.ctid }}/24,gw={{ gateway }},rate=50" \
+          --nameserver "{{ dns_server }}" \
+          --password "{{ password }}" \
+          --features nesting=1
+      loop: "{{ containers }}"
+
+    - name: Start LXC containers
+      shell: |
+        pct start {{ item.ctid }}
+      loop: "{{ containers }}"
+
+    - name: Wait for containers to start
+      shell: |
+        pct status {{ item.ctid }} | grep -q "running"
+      register: wait_start
+      until: wait_start.rc == 0
+      retries: 60
+      delay: 1
+      loop: "{{ containers }}"
+
+    - name: Display completion message
+      debug:
+        msg: "LXC {{ item.ctid }} ({{ item.hostname }}) is ready - IP: {{ base_ip }}.{{ item.ctid }}"
+      loop: "{{ containers }}"
