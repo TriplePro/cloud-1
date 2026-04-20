@@ -6,7 +6,6 @@ set -u          # stop on undefined variable
 set -o pipefail # stop if one | of | the options fail
 
 read -p "Enter the container ID (CTID): " CTID
-HOSTNAME="wordpress-lxc"
 TEMPLATE="local:vztmpl/ubuntu-22.04-standard_22.04-1_amd64.tar.zst"
 PASSWORD="password"
 DISK_SIZE="30"
@@ -59,7 +58,7 @@ printf "\n==============================\n\n"
 #    --net0 "name=eth0,bridge=${BRIDGE},ip=${IPV4},gw=${GATEWAY}" \
 
 pct create "$CTID" "$TEMPLATE" \
-    --hostname "$HOSTNAME" \
+    --hostname "wordpress-$CTID" \
     --cores "$CORES" \
     --memory "$MEMORY" \
     --rootfs "${STORAGE}:${DISK_SIZE}" \
@@ -118,6 +117,29 @@ pct exec "$CTID" -- ufw default allow outgoing
 pct exec "$CTID" -- ufw allow 22/tcp
 pct exec "$CTID" -- ufw allow 80/tcp
 pct exec "$CTID" -- ufw allow 443/tcp
+pct exec "$CTID" -- ufw allow 10050/tcp
+
+printf "\n==============================\n"
+printf "install and configure Zabbix Agent\n"
+pct exec "$CTID" -- apt install -y zabbix-agent
+
+printf "\n==============================\n"
+printf "configuring Zabbix Agent\n"
+pct exec "$CTID" -- cp /etc/zabbix/zabbix_agentd.conf /etc/zabbix/zabbix_agentd.conf.bak
+
+# Configure Zabbix Agent
+pct exec "$CTID" -- bash -c "sed -i 's/^Server=.*/Server=10.24.50.110/' /etc/zabbix/zabbix_agentd.conf"
+pct exec "$CTID" -- bash -c "sed -i 's/^ServerActive=.*/ServerActive=10.24.50.110/' /etc/zabbix/zabbix_agentd.conf"
+pct exec "$CTID" -- bash -c "sed -i 's/^# Hostname=.*/Hostname=wordpress-${CTID}/' /etc/zabbix/zabbix_agentd.conf"
+pct exec "$CTID" -- bash -c "sed -i 's/^# HostInterface=.*/HostInterface=10.24.50.${CTID}/' /etc/zabbix/zabbix_agentd.conf"
+
+# Enable and start Zabbix Agent
+pct exec "$CTID" -- systemctl enable zabbix-agent
+pct exec "$CTID" -- systemctl start zabbix-agent
+
+printf "\n==============================\n"
+printf "verifying Zabbix Agent status\n"
+pct exec "$CTID" -- systemctl status zabbix-agent
 
 printf "\n==============================\n"
 printf "LXC: %s is ready and able.\n" "$CTID"

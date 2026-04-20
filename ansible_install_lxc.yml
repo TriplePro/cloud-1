@@ -194,6 +194,56 @@
         pct exec {{ item.ctid }} -- ufw allow 443/tcp
       loop: "{{ containers }}"
 
+    - name: Allow Zabbix Agent through firewall
+      shell: |
+        pct exec {{ item.ctid }} -- ufw allow 10050/tcp
+      loop: "{{ containers }}"
+
+    - name: Install Zabbix Agent
+      shell: |
+        pct exec {{ item.ctid }} -- apt install -y zabbix-agent
+      loop: "{{ containers }}"
+
+    - name: Backup original Zabbix Agent config
+      shell: |
+        pct exec {{ item.ctid }} -- cp /etc/zabbix/zabbix_agentd.conf /etc/zabbix/zabbix_agentd.conf.bak
+      loop: "{{ containers }}"
+
+    - name: Configure Zabbix Agent Server
+      shell: |
+        pct exec {{ item.ctid }} -- bash -c "sed -i 's/^Server=.*/Server=10.24.50.110/' /etc/zabbix/zabbix_agentd.conf"
+      loop: "{{ containers }}"
+
+    - name: Configure Zabbix Agent ServerActive
+      shell: |
+        pct exec {{ item.ctid }} -- bash -c "sed -i 's/^ServerActive=.*/ServerActive=10.24.50.110/' /etc/zabbix/zabbix_agentd.conf"
+      loop: "{{ containers }}"
+
+    - name: Configure Zabbix Agent Hostname
+      shell: |
+        pct exec {{ item.ctid }} -- bash -c "sed -i 's/^# Hostname=.*/Hostname=wordpress-{{ item.ctid }}/' /etc/zabbix/zabbix_agentd.conf"
+      loop: "{{ containers }}"
+
+    - name: Configure Zabbix Agent HostInterface
+      shell: |
+        pct exec {{ item.ctid }} -- bash -c "sed -i 's/^# HostInterface=.*/HostInterface={{ base_ip }}.{{ item.ctid }}/' /etc/zabbix/zabbix_agentd.conf"
+      loop: "{{ containers }}"
+
+    - name: Enable Zabbix Agent
+      shell: |
+        pct exec {{ item.ctid }} -- systemctl enable zabbix-agent
+      loop: "{{ containers }}"
+
+    - name: Start Zabbix Agent
+      shell: |
+        pct exec {{ item.ctid }} -- systemctl start zabbix-agent
+      loop: "{{ containers }}"
+
+    - name: Verify Zabbix Agent status
+      shell: |
+        pct exec {{ item.ctid }} -- systemctl status zabbix-agent
+      loop: "{{ containers }}"
+
     - name: Display completion message
       debug:
         msg: "LXC {{ item.ctid }} is ready and able (IP: {{ base_ip }}.{{ item.ctid }})"
