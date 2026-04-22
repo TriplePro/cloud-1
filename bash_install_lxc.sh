@@ -136,6 +136,7 @@ pct exec "$CTID" -- bash -c "sed -i 's/^# HostInterface=.*/HostInterface=10.24.5
 # Enable and start Zabbix Agent
 pct exec "$CTID" -- systemctl enable zabbix-agent
 pct exec "$CTID" -- systemctl start zabbix-agent
+pct exec "$CTID" -- systemctl restart zabbix-agent
 
 printf "\n==============================\n"
 printf "verifying Zabbix Agent status\n"

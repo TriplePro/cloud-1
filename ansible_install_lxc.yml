@@ -239,6 +239,11 @@
         pct exec {{ item.ctid }} -- systemctl start zabbix-agent
       loop: "{{ containers }}"
 
+    - name: Restart Zabbix Agent
+      shell: |
+        pct exec {{ item.ctid }} -- systemctl restart zabbix-agent
+      loop: "{{ containers }}"
+
     - name: Verify Zabbix Agent status
       shell: |
         pct exec {{ item.ctid }} -- systemctl status zabbix-agent
