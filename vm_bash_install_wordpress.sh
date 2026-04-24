@@ -6,7 +6,7 @@ set -u          # stop on undefined variable
 set -o pipefail # stop if one | of | the options fail
 
 read -p "Enter the VM ID (VMID): " VMID
-VM_IP="10.24.50.VMID"
+VM_IP="10.24.50.$VMID"
 DB_USER="wordpress_user"
 DB_PASSWORD="password"
 DB_NAME="wordpress"
@@ -32,23 +32,23 @@ fi
 printf "\n==============================\n"
 printf "Updating packages...\n"
 printf "\n==============================\n"
-qm guest exec "$VMID" -- apt update
-qm guest exec "$VMID" -- apt upgrade -y
+qm guest exec "$VMID" -- apt-get update
+qm guest exec "$VMID" -- apt-get upgrade -y
 
 printf "\n==============================\n"
 printf "Installing nginx...\n"
 printf "\n==============================\n"
-qm guest exec "$VMID" -- apt install -y nginx
+qm guest exec "$VMID" -- apt-get install -y nginx
 
 printf "\n==============================\n"
 printf "Installing MariaDB server...\n"
 printf "\n==============================\n"
-qm guest exec "$VMID" -- apt install -y mariadb-server
+qm guest exec "$VMID" -- apt-get install -y mariadb-server
 
 printf "\n==============================\n"
 printf "Installing PHP and modules...\n"
 printf "\n==============================\n"
-qm guest exec "$VMID" -- apt install -y php-fpm php-mysql
+qm guest exec "$VMID" -- apt-get install -y php-fpm php-mysql
 
 printf "\n==============================\n"
 printf "Detecting PHP version...\n"
@@ -75,26 +75,20 @@ qm guest exec "$VMID" -- mysql -e "FLUSH PRIVILEGES;"
 
 printf "\n==============================\n"
 printf "Creating WordPress directory...\n"
-qm guest exec "$VMID" -- mkdir -p "$WP_DIR"
+qm guest exec "$VMID" -- sudo mkdir -p "$WP_DIR"
 
 printf "\n==============================\n"
-printf "Checking if WordPress is already installed...\n"
-if qm guest exec "$VMID" -- [ -f "$WP_DIR/wp-config.php" ]; then
-    printf "WordPress is already installed at %s\n" "$WP_DIR"
-    printf "Skipping download and installation.\n"
-else
-    printf "WordPress not found. Downloading and installing...\n"
-    qm guest exec "$VMID" -- bash -c "cd /tmp && wget -q ${WP_URL} && tar -xzf latest.tar.gz && mv wordpress/* ${WP_DIR}/ && rm -rf wordpress latest.tar.gz"
-fi
+printf "Downloading and installing WordPress...\n"
+qm guest exec "$VMID" -- bash -c "cd /tmp && wget -q ${WP_URL} && tar -xzf latest.tar.gz && sudo mv wordpress/* ${WP_DIR}/ && rm -rf wordpress latest.tar.gz"
 
 printf "\n==============================\n"
-printf "Setting WordPress owner and group...\n"
-qm guest exec "$VMID" -- chown -R www-data:www-data "$WP_DIR"
-qm guest exec "$VMID" -- chmod -R 755 "$WP_DIR"
+printf "Setting access to WordPress directory...\n"
+qm guest exec "$VMID" -- sudo chown -R www-data:www-data "$WP_DIR"
+qm guest exec "$VMID" -- sudo chmod -R 755 "$WP_DIR"
 
 printf "\n==============================\n"
 printf "Configuring nginx for WordPress...\n"
-qm guest exec "$VMID" -- bash -c "cat > /etc/nginx/sites-available/wordpress << 'EOF'
+qm guest exec "$VMID" -- bash -c "sudo cat > /etc/nginx/sites-available/wordpress << 'EOF'
 server {
     listen 80;
     server_name ${VM_IP};
@@ -120,12 +114,8 @@ EOF
 
 printf "\n==============================\n"
 printf "Enabling nginx site...\n"
-if qm guest exec "$VMID" -- [ -L /etc/nginx/sites-enabled/wordpress ]; then
-    printf "Symbolic link for WordPress site already exists.\n"
-else
-    printf "Creating symbolic link for WordPress site...\n"
-    qm guest exec "$VMID" -- bash -c "rm -f /etc/nginx/sites-enabled/default && ln -s /etc/nginx/sites-available/wordpress /etc/nginx/sites-enabled/wordpress"
-fi
+printf "Creating symbolic link for WordPress site...\n"
+qm guest exec "$VMID" -- bash -c "rm -f /etc/nginx/sites-enabled/default && ln -s /etc/nginx/sites-available/wordpress /etc/nginx/sites-enabled/wordpress"
 
 printf "\n==============================\n"
 printf "Starting PHP-FPM...\n"
@@ -139,44 +129,6 @@ printf "\n==============================\n"
 qm guest exec "$VMID" -- nginx -t
 qm guest exec "$VMID" -- systemctl restart nginx
 qm guest exec "$VMID" -- systemctl enable nginx
-
-printf "\n==============================\n"
-printf "Installing and configuring UFW firewall...\n"
-printf "\n==============================\n"
-qm guest exec "$VMID" -- apt install -y ufw
-qm guest exec "$VMID" -- ufw --force enable
-qm guest exec "$VMID" -- ufw default deny incoming
-qm guest exec "$VMID" -- ufw default allow outgoing
-qm guest exec "$VMID" -- ufw allow 22/tcp
-qm guest exec "$VMID" -- ufw allow 80/tcp
-qm guest exec "$VMID" -- ufw allow 443/tcp
-qm guest exec "$VMID" -- ufw allow 10050/tcp
-
-printf "\n==============================\n"
-printf "Installing and configuring Zabbix Agent...\n"
-printf "\n==============================\n"
-qm guest exec "$VMID" -- apt install -y zabbix-agent
-
-printf "\n==============================\n"
-printf "Backing up original Zabbix Agent config...\n"
-qm guest exec "$VMID" -- cp /etc/zabbix/zabbix_agentd.conf /etc/zabbix/zabbix_agentd.conf.bak
-
-printf "\n==============================\n"
-printf "Configuring Zabbix Agent...\n"
-qm guest exec "$VMID" -- bash -c "sed -i 's/^Server=.*/Server=10.24.50.110/' /etc/zabbix/zabbix_agentd.conf"
-qm guest exec "$VMID" -- bash -c "sed -i 's/^ServerActive=.*/ServerActive=10.24.50.110/' /etc/zabbix/zabbix_agentd.conf"
-qm guest exec "$VMID" -- bash -c "sed -i 's/^# Hostname=.*/Hostname=wordpress-${VMID}/' /etc/zabbix/zabbix_agentd.conf"
-qm guest exec "$VMID" -- bash -c "sed -i 's/^# HostInterface=.*/HostInterface=${VM_IP}/' /etc/zabbix/zabbix_agentd.conf"
-
-printf "\n==============================\n"
-printf "Enabling and starting Zabbix Agent...\n"
-qm guest exec "$VMID" -- systemctl enable zabbix-agent
-qm guest exec "$VMID" -- systemctl start zabbix-agent
-qm guest exec "$VMID" -- systemctl restart zabbix-agent
-
-printf "\n==============================\n"
-printf "Verifying Zabbix Agent status...\n"
-qm guest exec "$VMID" -- systemctl status zabbix-agent
 
 printf "\n==============================\n"
 printf "WordPress installation complete!\n"
