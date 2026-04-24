@@ -173,7 +173,9 @@ packages:
   - qemu-guest-agent
   - openssh-server
   - ufw
-  - zabbix-agent
+  - wget
+  - curl
+  - gnupg
 
 locale: en_US.UTF-8
 
@@ -196,12 +198,20 @@ runcmd:
   - systemctl start qemu-guest-agent
   - systemctl restart qemu-guest-agent
 
+  - sudo wget https://repo.zabbix.com/zabbix/7.0/ubuntu/pool/main/z/zabbix-release/zabbix-release_latest_7.0+ubuntu22.04_all.deb
+  - sudo dpkg -i zabbix-release_latest_7.0+ubuntu22.04_all.deb
+  - sudo apt update
+  - sudo apt install -y zabbix-agent2
+
   - mkdir -p /etc/zabbix
-  - echo "[zabbix_agentd]" > /etc/zabbix/zabbix_agentd.conf
-  - echo "Server=${ZABBIX_SERVER}" >> /etc/zabbix/zabbix_agentd.conf
-  - echo "Hostname=wordpress-${VMID}" >> /etc/zabbix/zabbix_agentd.conf
-  - systemctl enable zabbix-agent
-  - systemctl start zabbix-agent
+  - sudo sed -i 's/^Server=.*/Server=10.24.50.110/' /etc/zabbix/zabbix_agent2.conf
+  - sudo sed -i 's/^ServerActive=.*/ServerActive=10.24.50.110/' /etc/zabbix/zabbix_agent2.conf
+  - sudo sed -i 's/^Hostname=.*/Hostname=wordpress-${VMID}/' /etc/zabbix/zabbix_agent2.conf
+  - sudo sed -i 's/^# HostInterface=.*/HostInterface=10.24.50.${VMID}/' /etc/zabbix/zabbix_agent2.conf
+
+  - systemctl enable zabbix-agent2
+  - systemctl start zabbix-agent2
+  - systemctl restart zabbix-agent2
 
   - ufw --force enable
   - ufw default deny incoming
@@ -284,7 +294,7 @@ qm guest exec "$VMID" -- cat /home/ansible/.ssh/authorized_keys
 printf "\n==============================\n"
 printf "Verifying Zabbix Agent...\n"
 
-qm guest exec "$VMID" -- systemctl status zabbix-agent || printf "Zabbix agent check mislukt, controleer handmatig\n"
+qm guest exec "$VMID" -- systemctl status zabbix-agent2 || printf "Zabbix agent check mislukt, controleer handmatig\n"
 
 # ==============================
 # Summary
