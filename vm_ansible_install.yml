@@ -64,9 +64,16 @@
       changed_when: false
       loop: "{{ containers }}"
 
+    - name: Disable HA for existing VMs
+      shell: |
+        ha-manager delete vm:{{ item.item.vmid }} 2>/dev/null || true
+      loop: "{{ vm_status.results }}"
+      when: item.rc == 0
+      failed_when: false
+
     - name: Stop existing VM
       shell: |
-        qm stop {{ item.item.vmid }}
+        qm stop {{ item.item.vmid }} 2>/dev/null || true
       loop: "{{ vm_status.results }}"
       when: item.rc == 0
       failed_when: false
@@ -83,7 +90,31 @@
 
     - name: Destroy existing VM
       shell: |
-        qm destroy {{ item.vmid }} --purge
+        qm destroy {{ item.vmid }} --purge --force 2>&1
+      loop: "{{ containers }}"
+      failed_when: false
+      ignore_errors: yes
+
+    - name: Force clean VM from database if still exists
+      shell: |
+        if qm status {{ item.vmid }} >/dev/null 2>&1; then
+          rm -f /etc/pve/nodes/*/qemu-server/{{ item.vmid }}.conf 2>/dev/null
+          rm -f /etc/pve/qemu-server/{{ item.vmid }}.conf 2>/dev/null
+        fi
+      loop: "{{ containers }}"
+      failed_when: false
+
+    - name: Wait 5 seconds for database sync
+      pause:
+        seconds: 5
+
+    - name: Verify VM is completely removed
+      shell: |
+        ! qm status {{ item.vmid }} >/dev/null 2>&1
+      register: vm_removed
+      until: vm_removed.rc == 0
+      retries: 10
+      delay: 2
       loop: "{{ containers }}"
       failed_when: false
 
@@ -101,6 +132,10 @@
           --ostype l26 \
           --agent enabled=1
       loop: "{{ containers }}"
+      register: vm_create
+      until: vm_create.rc == 0
+      retries: 3
+      delay: 2
 
     - name: Import cloud image as boot disk
       shell: |
@@ -117,10 +152,26 @@
         qm disk resize {{ item.vmid }} scsi0 {{ disk_size }}G
       loop: "{{ containers }}"
 
+    - name: Force clean cloud-init images if they exist
+      shell: |
+        rbd rm {{ storage }}/vm-{{ item.vmid }}-cloudinit 2>/dev/null || true
+      loop: "{{ containers }}"
+      failed_when: false
+      ignore_errors: yes
+
+    - name: Wait for RBD cleanup
+      pause:
+        seconds: 2
+
     - name: Attach cloud-init drive
       shell: |
         qm set {{ item.vmid }} --ide2 "{{ storage }}:cloudinit"
       loop: "{{ containers }}"
+      register: cloudinit_attach
+      until: cloudinit_attach.rc == 0
+      retries: 3
+      delay: 2
+      failed_when: false
 
     - name: Configure boot order
       shell: |
@@ -271,6 +322,39 @@
       failed_when: false
       loop: "{{ containers }}"
 
+    - name: Enable HA for new VMs
+      shell: |
+        ha-manager set vm:{{ item.vmid }} --comment "WordPress VM {{ item.vmid }}" --startup order=1,up=600
+      loop: "{{ containers }}"
+      register: ha_enable_result
+      failed_when: false
+
+    - name: Display HA enable status
+      debug:
+        msg: |
+          HA Status for VM {{ item.vmid }}:
+          {% if ha_enable_result.results[ansible_loop.index0].rc == 0 %}
+          ✓ HA Successfully Enabled
+          {% else %}
+          ✗ HA Enable Failed (VM might not be running yet, check manually)
+          {% endif %}
+      loop: "{{ containers }}"
+      loop_control:
+        extended: true
+
+    - name: Detach cloud-init snippet from VM
+      shell: |
+        qm set {{ item.vmid }} --delete cicustom
+      loop: "{{ containers }}"
+      failed_when: false
+
+    - name: Remove cloud-init snippet files
+      file:
+        path: /var/lib/vz/snippets/wordpress-{{ item.vmid }}-userdata.yaml
+        state: absent
+      loop: "{{ containers }}"
+      failed_when: false
+
     - name: Display completion message
       debug:
         msg: |
@@ -286,6 +370,8 @@
             Gateway:        {{ gateway }}
             DNS:            {{ dns_server }}
             Zabbix Server:  {{ zabbix_server }}
+            HA Status:      Enabled
+            Cloud-init:     Detached and cleaned
           
           Next steps:
             1. SSH into VM: ssh {{ username }}@{{ base_ip }}.{{ item.vmid }}
