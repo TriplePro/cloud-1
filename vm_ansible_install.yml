@@ -221,7 +221,7 @@
 
     - name: Wait for cloud-init to complete
       pause:
-        minutes: 2
+        minutes: 3
         prompt: "Waiting for cloud-init to complete. This may take 2-3 minutes..."
       run_once: true
 
@@ -230,7 +230,7 @@
         qm guest exec {{ item.vmid }} -- true
       register: guest_agent_check
       until: guest_agent_check.rc == 0
-      retries: 30
+      retries: 45
       delay: 2
       failed_when: false
       loop: "{{ containers }}"
