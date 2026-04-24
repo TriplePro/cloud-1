@@ -1,0 +1,154 @@
+---
+- name: Install WordPress on QEMU VMs
+  hosts: localhost
+  connection: local
+  become: true
+  vars:
+    base_ip: "10.24.50"
+    db_user: "wordpress_user"
+    db_password: "password"
+    db_name: "wordpress"
+    wp_url: "https://wordpress.org/latest.tar.gz"
+    wp_dir: "/var/www/wordpress"
+
+  vars_files:
+    - vm_ansible_install_containers.yml
+
+  tasks:
+    - name: Check if VM is running
+      shell: |
+        qm status {{ item.vmid }} | grep -q "running"
+      register: vm_running
+      failed_when: false
+      changed_when: false
+      loop: "{{ containers }}"
+
+    - name: Start VM if not running
+      shell: |
+        qm start {{ item.item.vmid }}
+      loop: "{{ vm_running.results }}"
+      when: item.rc != 0
+      failed_when: false
+
+    - name: Wait for VM to start
+      pause:
+        seconds: 15
+      when: vm_running.results | selectattr('rc', 'ne', 0) | list | length > 0
+      run_once: true
+
+    - name: Update packages
+      shell: |
+        qm guest exec {{ item.vmid }} -- apt-get update
+        qm guest exec {{ item.vmid }} -- apt-get upgrade -y
+      loop: "{{ containers }}"
+
+    - name: Install nginx
+      shell: |
+        qm guest exec {{ item.vmid }} -- apt-get install -y nginx
+      loop: "{{ containers }}"
+
+    - name: Install MariaDB server
+      shell: |
+        qm guest exec {{ item.vmid }} -- apt-get install -y mariadb-server
+      loop: "{{ containers }}"
+
+    - name: Install PHP and modules
+      shell: |
+        qm guest exec {{ item.vmid }} -- apt-get install -y php-fpm php-mysql
+      loop: "{{ containers }}"
+
+    - name: Detect PHP version
+      shell: |
+        qm guest exec {{ item.vmid }} -- php -v | grep -oP 'PHP \K[0-9]+\.[0-9]+'
+      register: php_version_output
+      loop: "{{ containers }}"
+
+    - name: Start and enable MariaDB
+      shell: |
+        qm guest exec {{ item.vmid }} -- systemctl start mariadb
+        qm guest exec {{ item.vmid }} -- systemctl enable mariadb
+      loop: "{{ containers }}"
+
+    - name: Create WordPress database
+      shell: |
+        qm guest exec {{ item.vmid }} -- mysql -e "CREATE DATABASE IF NOT EXISTS {{ db_name }};"
+        qm guest exec {{ item.vmid }} -- mysql -e "CREATE USER IF NOT EXISTS '{{ db_user }}'@'localhost' IDENTIFIED BY '{{ db_password }}';"
+        qm guest exec {{ item.vmid }} -- mysql -e "GRANT ALL PRIVILEGES ON {{ db_name }}.* TO '{{ db_user }}'@'localhost';"
+        qm guest exec {{ item.vmid }} -- mysql -e "FLUSH PRIVILEGES;"
+      loop: "{{ containers }}"
+
+    - name: Create WordPress directory
+      shell: |
+        qm guest exec {{ item.vmid }} -- mkdir -p {{ wp_dir }}
+      loop: "{{ containers }}"
+
+    - name: Download and install WordPress
+      shell: |
+        qm guest exec {{ item.vmid }} -- bash -c "cd /tmp && wget -q {{ wp_url }} && tar -xzf latest.tar.gz && mv wordpress/* {{ wp_dir }}/ && rm -rf wordpress latest.tar.gz"
+      loop: "{{ containers }}"
+
+    - name: Set WordPress directory ownership
+      shell: |
+        qm guest exec {{ item.vmid }} -- chown -R www-data:www-data {{ wp_dir }}
+        qm guest exec {{ item.vmid }} -- chmod -R 755 {{ wp_dir }}
+      loop: "{{ containers }}"
+
+    - name: Configure nginx for WordPress
+      shell: |
+        qm guest exec {{ item.vmid }} -- bash -c "cat > /etc/nginx/sites-available/wordpress << 'EOF'
+        server {
+            listen 80;
+            server_name {{ base_ip }}.{{ item.vmid }};
+
+            root {{ wp_dir }};
+            index index.php index.html;
+
+            location / {
+                try_files \$uri \$uri/ /index.php?\$args;
+            }
+
+            location ~ \.php\$ {
+                include snippets/fastcgi-php.conf;
+                fastcgi_pass unix:/var/run/php/php{{ php_version_output.results[ansible_loop.index0].stdout }}-fpm.sock;
+            }
+
+            location ~ /\.ht {
+                deny all;
+            }
+        }
+        EOF"
+      loop: "{{ containers }}"
+      loop_control:
+        extended: true
+
+    - name: Enable nginx site
+      shell: |
+        qm guest exec {{ item.vmid }} -- bash -c "rm -f /etc/nginx/sites-enabled/default && ln -s /etc/nginx/sites-available/wordpress /etc/nginx/sites-enabled/wordpress"
+      loop: "{{ containers }}"
+
+    - name: Start and enable PHP-FPM
+      shell: |
+        qm guest exec {{ item.vmid }} -- bash -c "PHP_VERSION=\$(php -v | grep -oP 'PHP \K[0-9]+\.[0-9]+'); systemctl start php\${PHP_VERSION}-fpm && systemctl enable php\${PHP_VERSION}-fpm"
+      loop: "{{ containers }}"
+
+    - name: Test and restart nginx
+      shell: |
+        qm guest exec {{ item.vmid }} -- nginx -t
+        qm guest exec {{ item.vmid }} -- systemctl restart nginx
+        qm guest exec {{ item.vmid }} -- systemctl enable nginx
+      loop: "{{ containers }}"
+
+    - name: Display WordPress installation summary
+      debug:
+        msg: |
+          WordPress installation complete for VM {{ item.vmid }}!
+
+          WordPress Details:
+            VM ID:              {{ item.vmid }}
+            IP Address:         {{ base_ip }}.{{ item.vmid }}
+            Database user:      {{ db_user }}
+            Database name:      {{ db_name }}
+            WordPress directory: {{ wp_dir }}
+
+          Access WordPress at: http://{{ base_ip }}.{{ item.vmid }}
+      loop: "{{ containers }}"

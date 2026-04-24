@@ -1,0 +1,293 @@
+---
+- name: Create and configure QEMU VM for WordPress
+  hosts: localhost
+  connection: local
+  become: true
+  vars:
+    cloud_image: "jammy-server-cloudimg-amd64.img"
+    image_dir: "/var/lib/vz/template/qemu"
+    disk_size: 30
+    cores: 1
+    memory: 1024
+    gateway: "10.24.50.1"
+    dns_server: "1.1.1.1"
+    bridge: "vmbr0"
+    storage: "shared-harddisk-pool"
+    username: "ansible"
+    base_ip: "10.24.50"
+    zabbix_server: "10.24.50.110"
+
+  vars_files:
+    - vm_ansible_install_containers.yml
+
+  tasks:
+    - name: Check if cloud image exists
+      stat:
+        path: "{{ image_dir }}/{{ cloud_image }}"
+      register: image_stat
+      run_once: true
+
+    - name: Fail if cloud image does not exist
+      fail:
+        msg: "Ubuntu cloud image does not exist at {{ image_dir }}/{{ cloud_image }}. Use vm_bash_download_img.sh to download."
+      when: not image_stat.stat.exists
+      run_once: true
+
+    - name: Check SSH key exists
+      stat:
+        path: "~/.ssh/id_rsa.pub"
+      register: ssh_key_stat
+      run_once: true
+
+    - name: Fail if SSH key does not exist
+      fail:
+        msg: "SSH key not found at ~/.ssh/id_rsa.pub. Generate one with: ssh-keygen -t rsa -b 4096"
+      when: not ssh_key_stat.stat.exists
+      run_once: true
+
+    - name: Read SSH public key
+      slurp:
+        src: "~/.ssh/id_rsa.pub"
+      register: ssh_key_content
+      run_once: true
+
+    - name: Set SSH key variable
+      set_fact:
+        ssh_key: "{{ ssh_key_content['content'] | b64decode | trim }}"
+      run_once: true
+
+    - name: Check if VM already exists
+      shell: |
+        qm status {{ item.vmid }} >/dev/null 2>&1
+      register: vm_status
+      failed_when: false
+      changed_when: false
+      loop: "{{ containers }}"
+
+    - name: Stop existing VM
+      shell: |
+        qm stop {{ item.item.vmid }}
+      loop: "{{ vm_status.results }}"
+      when: item.rc == 0
+      failed_when: false
+
+    - name: Wait for VM to stop
+      shell: |
+        qm status {{ item.vmid }} | grep -q "running"
+      register: wait_stop
+      until: wait_stop.rc != 0
+      retries: 90
+      delay: 1
+      loop: "{{ containers }}"
+      failed_when: false
+
+    - name: Destroy existing VM
+      shell: |
+        qm destroy {{ item.vmid }} --purge
+      loop: "{{ containers }}"
+      failed_when: false
+
+    - name: Create QEMU VM
+      shell: |
+        MACADDR=$(printf '52:54:00:12:34:%02x' $(({{ item.vmid }} % 256)))
+        qm create {{ item.vmid }} \
+          --name "wordpress-{{ item.vmid }}" \
+          --cores {{ cores }} \
+          --memory {{ memory }} \
+          --sockets 1 \
+          --cpu host \
+          --net0 "virtio,bridge={{ bridge }},macaddr=${MACADDR},rate=50" \
+          --scsihw virtio-scsi-single \
+          --ostype l26 \
+          --agent enabled=1
+      loop: "{{ containers }}"
+
+    - name: Import cloud image as boot disk
+      shell: |
+        qm importdisk {{ item.vmid }} {{ image_dir }}/{{ cloud_image }} {{ storage }}
+      loop: "{{ containers }}"
+
+    - name: Attach boot disk to VM
+      shell: |
+        qm set {{ item.vmid }} --scsi0 "{{ storage }}:vm-{{ item.vmid }}-disk-0,discard=on"
+      loop: "{{ containers }}"
+
+    - name: Resize boot disk
+      shell: |
+        qm disk resize {{ item.vmid }} scsi0 {{ disk_size }}G
+      loop: "{{ containers }}"
+
+    - name: Attach cloud-init drive
+      shell: |
+        qm set {{ item.vmid }} --ide2 "{{ storage }}:cloudinit"
+      loop: "{{ containers }}"
+
+    - name: Configure boot order
+      shell: |
+        qm set {{ item.vmid }} \
+          --boot order=scsi0 \
+          --bootdisk scsi0
+      loop: "{{ containers }}"
+
+    - name: Configure network via cloud-init
+      shell: |
+        qm set {{ item.vmid }} \
+          --ipconfig0 "ip={{ base_ip }}.{{ item.vmid }}/24,gw={{ gateway }}" \
+          --nameserver "{{ dns_server }}"
+      loop: "{{ containers }}"
+
+    - name: Create snippets directory
+      file:
+        path: /var/lib/vz/snippets
+        state: directory
+        mode: '0755'
+      run_once: true
+
+    - name: Create cloud-init user data file
+      copy:
+        content: |
+          #cloud-config
+          hostname: wordpress-{{ item.vmid }}
+          fqdn: wordpress-{{ item.vmid }}.local
+          manage_etc_hosts: true
+          timezone: Europe/Amsterdam
+
+          package_update: true
+          package_upgrade: true
+
+          packages:
+            - qemu-guest-agent
+            - openssh-server
+            - ufw
+            - wget
+            - curl
+            - gnupg
+
+          locale: en_US.UTF-8
+
+          users:
+            - name: {{ username }}
+              gecos: Ansible User
+              groups: [sudo]
+              shell: /bin/bash
+              sudo: ALL=(ALL) NOPASSWD:ALL
+              lock_passwd: true
+              ssh_authorized_keys:
+                - {{ ssh_key }}
+
+          bootcmd:
+            - locale-gen en_US.UTF-8
+            - update-locale LANG=en_US.UTF-8
+
+          runcmd:
+            - systemctl enable qemu-guest-agent
+            - systemctl start qemu-guest-agent
+            - systemctl restart qemu-guest-agent
+
+            - sudo wget https://repo.zabbix.com/zabbix/7.0/ubuntu/pool/main/z/zabbix-release/zabbix-release_latest_7.0+ubuntu22.04_all.deb
+            - sudo dpkg -i zabbix-release_latest_7.0+ubuntu22.04_all.deb
+            - sudo apt update
+            - sudo apt install -y zabbix-agent2
+
+            - mkdir -p /etc/zabbix
+            - sudo sed -i 's/^Server=.*/Server={{ zabbix_server }}/' /etc/zabbix/zabbix_agent2.conf
+            - sudo sed -i 's/^ServerActive=.*/ServerActive={{ zabbix_server }}/' /etc/zabbix/zabbix_agent2.conf
+            - sudo sed -i 's/^Hostname=.*/Hostname=wordpress-{{ item.vmid }}/' /etc/zabbix/zabbix_agent2.conf
+            - sudo sed -i 's/^# HostInterface=.*/HostInterface={{ base_ip }}.{{ item.vmid }}/' /etc/zabbix/zabbix_agent2.conf
+
+            - systemctl enable zabbix-agent2
+            - systemctl start zabbix-agent2
+            - systemctl restart zabbix-agent2
+
+            - ufw --force enable
+            - ufw default deny incoming
+            - ufw default allow outgoing
+            - ufw allow 22/tcp
+            - ufw allow 80/tcp
+            - ufw allow 443/tcp
+            - ufw allow 10050/tcp
+        dest: /var/lib/vz/snippets/wordpress-{{ item.vmid }}-userdata.yaml
+      loop: "{{ containers }}"
+
+    - name: Attach cloud-init snippet to VM
+      shell: |
+        qm set {{ item.vmid }} --cicustom "user=local:snippets/wordpress-{{ item.vmid }}-userdata.yaml"
+      loop: "{{ containers }}"
+
+    - name: Start VM
+      shell: |
+        qm start {{ item.vmid }}
+      loop: "{{ containers }}"
+
+    - name: Wait for cloud-init to complete
+      pause:
+        minutes: 2
+        prompt: "Waiting for cloud-init to complete. This may take 2-3 minutes..."
+      run_once: true
+
+    - name: Wait for QEMU Guest Agent to respond
+      shell: |
+        qm guest exec {{ item.vmid }} -- true
+      register: guest_agent_check
+      until: guest_agent_check.rc == 0
+      retries: 30
+      delay: 2
+      failed_when: false
+      loop: "{{ containers }}"
+
+    - name: Fail if QEMU Guest Agent not responding
+      fail:
+        msg: "QEMU Guest Agent not responding after timeout for VM {{ item.item.vmid }}. Check with: qm guest exec {{ item.item.vmid }} -- cat /var/log/cloud-init-output.log"
+      loop: "{{ guest_agent_check.results }}"
+      when: item.rc != 0
+
+    - name: Verify ansible user exists
+      shell: |
+        qm guest exec {{ item.vmid }} -- id {{ username }}
+      register: user_check
+      failed_when: user_check.rc != 0
+      loop: "{{ containers }}"
+
+    - name: Display ansible user verification
+      debug:
+        msg: "Ansible user {{ username }} exists and is correctly created for VM {{ item.vmid }}"
+      loop: "{{ containers }}"
+
+    - name: Check SSH authorized_keys
+      shell: |
+        qm guest exec {{ item.vmid }} -- cat /home/{{ username }}/.ssh/authorized_keys
+      register: ssh_keys_check
+      loop: "{{ containers }}"
+
+    - name: Display SSH authorized_keys
+      debug:
+        msg: "{{ item.stdout }}"
+      loop: "{{ ssh_keys_check.results }}"
+
+    - name: Verify Zabbix Agent status
+      shell: |
+        qm guest exec {{ item.vmid }} -- systemctl status zabbix-agent2
+      register: zabbix_status
+      failed_when: false
+      loop: "{{ containers }}"
+
+    - name: Display completion message
+      debug:
+        msg: |
+          VM {{ item.vmid }} is ready!
+          
+          VM Details:
+            VM ID:          {{ item.vmid }}
+            Name:           wordpress-{{ item.vmid }}
+            Cores:          {{ cores }}
+            Memory:         {{ memory }} MB
+            Disk Size:      {{ disk_size }} GB
+            IP Address:     {{ base_ip }}.{{ item.vmid }}/24
+            Gateway:        {{ gateway }}
+            DNS:            {{ dns_server }}
+            Zabbix Server:  {{ zabbix_server }}
+          
+          Next steps:
+            1. SSH into VM: ssh {{ username }}@{{ base_ip }}.{{ item.vmid }}
+            2. Run WordPress install script: ./vm_bash_install_wordpress.sh
+      loop: "{{ containers }}"
