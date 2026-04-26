@@ -1,0 +1,91 @@
+version: "3.8"
+
+services:
+  # NGINX Load Balancer
+  nginx:
+    image: nginx:latest
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - app1
+      - app2
+      - app3
+    networks:
+      - app_network
+    container_name: nginx-lb
+
+  # App Instance 1
+  app1:
+    build: .
+    ports:
+      - "3001:3001"
+    environment:
+      APP_PORT: 3001
+      APP_NAME: "App Server 1"
+      MYSQL_HOST: mysql
+      MYSQL_USER: root
+      MYSQL_PASSWORD: secret
+      MYSQL_DB: appdb
+    depends_on:
+      - mysql
+    networks:
+      - app_network
+    container_name: app1
+
+  # App Instance 2
+  app2:
+    build: .
+    ports:
+      - "3002:3002"
+    environment:
+      APP_PORT: 3002
+      APP_NAME: "App Server 2"
+      MYSQL_HOST: mysql
+      MYSQL_USER: root
+      MYSQL_PASSWORD: secret
+      MYSQL_DB: appdb
+    depends_on:
+      - mysql
+    networks:
+      - app_network
+    container_name: app2
+
+  # App Instance 3
+  app3:
+    build: .
+    ports:
+      - "3003:3003"
+    environment:
+      APP_PORT: 3003
+      APP_NAME: "App Server 3"
+      MYSQL_HOST: mysql
+      MYSQL_USER: root
+      MYSQL_PASSWORD: secret
+      MYSQL_DB: appdb
+    depends_on:
+      - mysql
+    networks:
+      - app_network
+    container_name: app3
+
+  # MySQL Database
+  mysql:
+    image: mysql:5.7
+    environment:
+      MYSQL_ROOT_PASSWORD: secret
+      MYSQL_DATABASE: appdb
+    volumes:
+      - mysql_data:/var/lib/mysql
+    networks:
+      - app_network
+    container_name: mysql
+
+networks:
+  app_network:
+    driver: bridge
+
+volumes:
+  mysql_data:
+    driver: local
